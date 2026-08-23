@@ -2,12 +2,42 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.19";
 import {
   downloadObject,
+  GlobalArgumentsSchema,
   keyWithinPrefix,
   listObjects,
   type S3Sender,
   verifyReadAccess,
   withClient,
 } from "./s3_object_read.ts";
+
+Deno.test("credentials are optional as a pair for the AWS provider chain", () => {
+  const base = {
+    endpoint: "https://s3.example.com",
+    bucket: "example-bucket",
+  };
+  assertEquals(GlobalArgumentsSchema.safeParse(base).success, true);
+  assertEquals(
+    GlobalArgumentsSchema.safeParse({ ...base, accessKeyId: "only-one" })
+      .success,
+    false,
+  );
+});
+
+Deno.test("configuration rejects malformed bucket, prefix, key, and bounds", () => {
+  const base = { endpoint: "https://s3.example.com", bucket: "example-bucket" };
+  assertEquals(
+    GlobalArgumentsSchema.safeParse({ ...base, bucket: "x" }).success,
+    false,
+  );
+  assertEquals(
+    GlobalArgumentsSchema.safeParse({ ...base, prefix: "bad\0prefix" }).success,
+    false,
+  );
+  assertEquals(
+    GlobalArgumentsSchema.safeParse({ ...base, maximumObjectBytes: 0 }).success,
+    false,
+  );
+});
 
 class FakeS3 implements S3Sender {
   commands: any[] = [];
@@ -77,6 +107,25 @@ Deno.test("verification is prefix-scoped and uses a one-byte range", async () =>
     MaxKeys: 1,
   });
   assertEquals(client.commands[2].input.Range, "bytes=0-0");
+});
+
+Deno.test("verification rejects malformed listings and sanitizes API errors", async () => {
+  await assertRejects(
+    () => verifyReadAccess(new FakeS3([{}, { Contents: [{}] }]), "bucket", ""),
+    Error,
+    "without a key",
+  );
+  const error = await assertRejects(
+    () =>
+      verifyReadAccess(
+        new FakeS3([new Error("secretAccessKey=do-not-leak")]),
+        "bucket",
+        "",
+      ),
+    Error,
+    "S3 HeadBucket failed",
+  );
+  assertEquals(error.message.includes("do-not-leak"), false);
 });
 
 Deno.test("listing never exceeds its requested maximum", async () => {

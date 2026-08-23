@@ -1,0 +1,22 @@
+{
+  "extension": "@mgreten/s3-object-read",
+  "version": "2026.08.23.1",
+  "reviewedAt": "2026-08-23T15:45:00Z",
+  "dimensions": [
+    { "id": "credentials-secrets", "verdict": "pass", "note": "Explicit credentials are optional only as a pair, marked sensitive, never logged, and omitted to use the standard AWS provider chain." },
+    { "id": "logging-quality", "verdict": "pass", "note": "Every public method logs entry and completion without bucket, prefix, key, credentials, or object content." },
+    { "id": "error-handling", "verdict": "pass", "note": "All SDK failures receive sanitized operation context; validation and API failures precede output, and failed streams retain only an intentional pending recovery marker." },
+    { "id": "testing-completeness", "verdict": "pass", "note": "Fourteen mocked Deno tests cover command contracts, malformed API and configuration input, credential pairing, API sanitization, prefix and size bounds, cleanup, stream races, and persistence." },
+    { "id": "idempotency-resilience", "verdict": "pass", "note": "The extension has no remote mutations and uses stable per-spec instance names; interrupted downloads have deterministic pending metadata." },
+    { "id": "api-contracts", "verdict": "pass", "note": "Only HeadBucket, ListObjectsV2, HeadObject, and GetObject are available; list requests are single-page and bounded by MaxKeys, truncation is explicit, range verification is one byte, and consumed response fields are validated." },
+    { "id": "resource-management", "verdict": "pass", "note": "S3 clients are destroyed in finally and the range-probe reader is cancelled in finally." },
+    { "id": "published-surface-hygiene", "verdict": "pass", "note": "README and tests use reserved example domains, placeholder buckets, keys, and credentials; no real infrastructure or object content is included." },
+    { "id": "schema-strictness", "verdict": "pass", "note": "All object schemas are strict, bucket/prefix/key/list/byte inputs are bounded, and schema-write conformance and field coverage are 1:1 for every writeResource call." },
+    { "id": "lifetime-gc", "verdict": "pass", "note": "Every resource and sensitive file spec has explicit lifetime and garbage collection." },
+    { "id": "crud-completeness", "verdict": "na", "note": "Purposefully read-only observation model; it manages no remote resource lifecycle." },
+    { "id": "preflight-checks", "verdict": "na", "note": "No mutating methods exist." },
+    { "id": "instance-names", "verdict": "pass", "note": "Verification, listing, file, and metadata specs use distinct stable names; pending and complete metadata intentionally replace the same schema-conformant instance." },
+    { "id": "data-access", "verdict": "na", "note": "No stored state is read." },
+    { "id": "version-upgrades", "verdict": "na", "note": "Initial unpublished version; registry dry run reports no prior published version." }
+  ]
+}

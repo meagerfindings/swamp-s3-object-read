@@ -19,6 +19,7 @@ bucket. It supports AWS S3 and compatible HTTPS endpoints.
 ```yaml
 type: "@mgreten/s3-object-read"
 globalArguments:
+  # Optional together; omit both to use the standard AWS credential chain.
   accessKeyId: "${{ vault.get(my-vault, S3_ACCESS_KEY_ID) }}"
   secretAccessKey: "${{ vault.get(my-vault, S3_SECRET_ACCESS_KEY) }}"
   endpoint: "https://s3.example.com"
@@ -31,6 +32,9 @@ globalArguments:
 
 `endpoint`, `bucket`, `prefix`, and both limits are configurable. Set
 `forcePathStyle` for compatible endpoints that require path-style addressing.
+Omit both credential fields to use IAM roles, instance profiles, or the
+standard AWS environment credential chain; if explicit credentials are used,
+both fields are required and treated as sensitive.
 The configured prefix scopes every list and download operation; use an empty
 prefix only when the backing credential is already restricted to the intended
 object keys.

@@ -11,25 +11,45 @@ import {
 const ABSOLUTE_MAX_LIST_OBJECTS = 1_000;
 const ABSOLUTE_MAX_OBJECT_BYTES = 5_368_709_120;
 
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 32 || codePoint === 127;
+  });
+}
+
+function hasNul(value: string): boolean {
+  return value.includes(String.fromCodePoint(0));
+}
+
 /**
  * Validates S3 connection settings, prefix scope, credentials, and read limits.
  * Credentials are marked sensitive for Swamp's secret handling.
  */
 export const GlobalArgumentsSchema = z.object({
-  accessKeyId: z.string().min(1).meta({ sensitive: true }),
-  secretAccessKey: z.string().min(1).meta({ sensitive: true }),
+  accessKeyId: z.string().min(1).optional().meta({ sensitive: true }),
+  secretAccessKey: z.string().min(1).optional().meta({ sensitive: true }),
   endpoint: z.url().refine((value) => new URL(value).protocol === "https:", {
     message: "endpoint must use HTTPS",
   }),
   region: z.string().min(1).default("us-east-1"),
-  bucket: z.string().min(1),
-  prefix: z.string().default(""),
+  bucket: z.string().min(3).max(255).refine(
+    (value) => !hasControlCharacter(value),
+    { message: "bucket must not contain control characters" },
+  ),
+  prefix: z.string().max(1_024).refine(
+    (value) => !hasNul(value),
+    { message: "prefix must not contain NUL" },
+  ).default(""),
   forcePathStyle: z.boolean().default(false),
   maximumListObjects: z.number().int().min(1).max(ABSOLUTE_MAX_LIST_OBJECTS)
     .default(100),
   maximumObjectBytes: z.number().int().positive().max(ABSOLUTE_MAX_OBJECT_BYTES)
     .default(104_857_600),
-}).strict();
+}).strict().refine(
+  (args) => Boolean(args.accessKeyId) === Boolean(args.secretAccessKey),
+  { message: "accessKeyId and secretAccessKey must be provided together" },
+);
 
 type GlobalArguments = z.infer<typeof GlobalArgumentsSchema>;
 
@@ -94,10 +114,12 @@ function createClient(args: GlobalArguments): S3Sender {
     endpoint: args.endpoint,
     region: args.region,
     forcePathStyle: args.forcePathStyle,
-    credentials: {
-      accessKeyId: args.accessKeyId,
-      secretAccessKey: args.secretAccessKey,
-    },
+    credentials: args.accessKeyId && args.secretAccessKey
+      ? {
+        accessKeyId: args.accessKeyId,
+        secretAccessKey: args.secretAccessKey,
+      }
+      : undefined,
   });
 }
 
@@ -210,23 +232,31 @@ export async function verifyReadAccess(
   bucket: string,
   prefix: string,
 ) {
-  await client.send(new HeadBucketCommand({ Bucket: bucket }));
-  const listing = await client.send(
-    new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: prefix || undefined,
-      MaxKeys: 1,
-    }),
+  await s3Request(
+    "HeadBucket",
+    () => client.send(new HeadBucketCommand({ Bucket: bucket })),
   );
-  const first = listing.Contents?.[0];
-  if (first?.Key) {
-    const response = await client.send(
-      new GetObjectCommand({
+  const listing = await s3Request("ListObjectsV2", () =>
+    client.send(
+      new ListObjectsV2Command({
         Bucket: bucket,
-        Key: first.Key,
-        Range: "bytes=0-0",
+        Prefix: prefix || undefined,
+        MaxKeys: 1,
       }),
-    );
+    ));
+  const first = listing.Contents?.[0];
+  if (first !== undefined && typeof first?.Key !== "string") {
+    throw new Error("S3 returned an object without a key");
+  }
+  if (first?.Key) {
+    const response = await s3Request("GetObject range probe", () =>
+      client.send(
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: first.Key,
+          Range: "bytes=0-0",
+        }),
+      ));
     const reader = responseStream(response.Body).getReader();
     try {
       const read = await reader.read();
@@ -253,13 +283,14 @@ export async function listObjects(
   prefix: string,
   maximum: number,
 ) {
-  const response = await client.send(
-    new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: prefix || undefined,
-      MaxKeys: maximum,
-    }),
-  );
+  const response = await s3Request("ListObjectsV2", () =>
+    client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix || undefined,
+        MaxKeys: maximum,
+      }),
+    ));
   const objects = (response.Contents ?? []).slice(0, maximum).map(
     objectMetadata,
   );
@@ -402,6 +433,9 @@ export const model = {
         _args: Record<string, never>,
         context: ExecutionContext,
       ) => {
+        context.logger.info("Verifying S3 read access", {
+          prefixScoped: context.globalArgs.prefix.length > 0,
+        });
         const result = await withClient(
           createClient(context.globalArgs),
           (client) =>
@@ -411,6 +445,9 @@ export const model = {
               context.globalArgs.prefix,
             ),
         );
+        context.logger.info("Verified S3 read access", {
+          objectCountObserved: result.objectCountObserved,
+        });
         return {
           dataHandles: [
             await context.writeResource(
@@ -437,6 +474,10 @@ export const model = {
           args.maximum ?? context.globalArgs.maximumListObjects,
           context.globalArgs.maximumListObjects,
         );
+        context.logger.info("Listing S3 objects", {
+          prefixScoped: context.globalArgs.prefix.length > 0,
+          maximum,
+        });
         const result = await withClient(
           createClient(context.globalArgs),
           (client) =>
@@ -447,6 +488,10 @@ export const model = {
               maximum,
             ),
         );
+        context.logger.info("Listed S3 objects", {
+          objectCount: result.objects.length,
+          truncated: result.truncated,
+        });
         return {
           dataHandles: [
             await context.writeResource(
@@ -461,12 +506,23 @@ export const model = {
     downloadObject: {
       description:
         "Download one explicitly named, prefix-scoped object as a bounded artifact; contents may be sensitive",
-      arguments: z.object({ key: z.string().min(1) }).strict(),
-      execute: (args: { key: string }, context: ExecutionContext) =>
-        withClient(
+      arguments: z.object({
+        key: z.string().min(1).max(1_024).refine(
+          (value) => !hasNul(value),
+          { message: "key must not contain NUL" },
+        ),
+      }).strict(),
+      execute: async (args: { key: string }, context: ExecutionContext) => {
+        context.logger.info("Downloading bounded S3 object", {
+          maximumObjectBytes: context.globalArgs.maximumObjectBytes,
+        });
+        const result = await withClient(
           createClient(context.globalArgs),
           (client) => downloadObject(client, context, args.key),
-        ),
+        );
+        context.logger.info("Downloaded bounded S3 object");
+        return result;
+      },
     },
   },
 };
