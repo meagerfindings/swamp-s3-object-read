@@ -1,0 +1,15 @@
+manifestVersion: 1
+name: "@mgreten/s3-object-read"
+version: 2026.08.23.1
+description: "Least-privilege, bounded reads from S3-compatible object storage."
+repository: "https://github.com/meagerfindings/swamp-s3-object-read"
+models:
+  - s3_object_read.ts
+workflows: []
+vaults: []
+drivers: []
+datastores: []
+reports: []
+additionalFiles:
+  - README.md
+  - LICENSE
