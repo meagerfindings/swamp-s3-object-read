@@ -1,6 +1,7 @@
 manifestVersion: 1
 name: "@mgreten/s3-object-read"
-version: 2026.08.23.1
+license: MIT
+version: 2026.10.14.1
 description: "Least-privilege, bounded reads from S3-compatible object storage."
 repository: "https://github.com/meagerfindings/swamp-s3-object-read"
 models:
